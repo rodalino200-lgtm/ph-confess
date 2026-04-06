@@ -1,1 +1,265 @@
-# ph-confess
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PH Confess | Live Official Wall</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Variables
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'ph-confess-live-v1';
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        let currentUserData = null;
+        let currentUser = null;
+
+        // Initialize Auth FIRST
+        const initAuth = async () => {
+            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                await signInWithCustomToken(auth, __initial_auth_token);
+            } else {
+                await signInAnonymously(auth);
+            }
+        };
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+        });
+
+        // --- NAVIGATION ---
+        window.showSection = (id) => {
+            ['wall', 'games', 'wallet'].forEach(s => {
+                document.getElementById('section-' + s).classList.add('hidden');
+                document.getElementById('nav-' + s).classList.remove('section-active');
+            });
+            document.getElementById('section-' + id).classList.remove('hidden');
+            document.getElementById('nav-' + id).classList.add('section-active');
+        };
+
+        // --- LOGIN & REGISTER ---
+        window.handleAuth = async () => {
+            const user = document.getElementById('auth-user').value.trim().toLowerCase();
+            const pass = document.getElementById('auth-pass').value.trim();
+            if(!user || !pass) return alert("Punan ang lahat!");
+
+            const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user);
+            const userSnap = await getDoc(userRef);
+            const isLoginMode = document.getElementById('auth-btn').innerText === "Mag-Login";
+
+            if(isLoginMode) {
+                if(userSnap.exists() && userSnap.data().pass === pass) {
+                    startSession(user);
+                } else { alert("Maling credentials!"); }
+            } else {
+                if(userSnap.exists()) return alert("Username taken!");
+                const newData = { pass: pass, coins: (user === 'admin' ? 99999 : 5), role: (user === 'admin' ? 'admin' : 'user') };
+                await setDoc(userRef, newData);
+                alert("Account created! Pwede ka na mag-Login.");
+                toggleAuth();
+            }
+        };
+
+        async function startSession(username) {
+            window.activeUsername = username;
+            document.getElementById('auth-section').classList.add('hidden');
+            document.getElementById('section-wall').classList.remove('hidden');
+            if(username === 'admin') document.getElementById('admin-nav-btn').classList.remove('hidden');
+            setupRealtimeListeners(username);
+            showSection('wall');
+        }
+
+        function setupRealtimeListeners(username) {
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'users', username), (snap) => {
+                if(snap.exists()) {
+                    currentUserData = snap.data();
+                    document.getElementById('user-info').innerHTML = `🪙 ${currentUserData.coins} | ${username.toUpperCase()}`;
+                    document.getElementById('wallet-balance').innerText = currentUserData.coins;
+                }
+            });
+
+            onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'posts'), (snap) => {
+                const posts = [];
+                snap.forEach(doc => posts.push(doc.data()));
+                renderPosts(posts.sort((a,b) => b.id - a.id));
+            });
+
+            if(username === 'admin') {
+                onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'pending'), (snap) => {
+                    const pends = [];
+                    snap.forEach(doc => pends.push({docId: doc.id, ...doc.data()}));
+                    renderPending(pends);
+                });
+            }
+        }
+
+        window.submitConfession = async () => {
+            const cost = window.confessCost || 5;
+            if(currentUserData.coins < cost) return alert("Kulang ang coins mo!");
+            const msg = document.getElementById('msg-input').value.trim();
+            if(!msg) return alert("Huwag hayaang bakante.");
+
+            await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', window.activeUsername), {
+                coins: currentUserData.coins - cost
+            });
+
+            await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'pending'), {
+                id: Date.now(), sender: window.activeUsername, message: msg,
+                date: new Date().toLocaleString(), type: cost === 10 ? 'URGENT' : 'REGULAR'
+            });
+
+            document.getElementById('msg-input').value = "";
+            alert("Naisend na sa Admin para sa approval!");
+        };
+
+        window.adminAction = async (docId, approve, data) => {
+            if(approve) await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'posts'), data);
+            await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'pending', docId));
+        };
+
+        window.runScanner = () => {
+            const names = Array.from(document.querySelectorAll('.si')).map(i => i.value).filter(v => v);
+            if(names.length < 2) return alert("Kailangan ng 2 names!");
+            setTimeout(() => {
+                alert("Scanning... Match found! +1 Coin reward.");
+                updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'users', window.activeUsername), {
+                    coins: currentUserData.coins + 1
+                });
+                confetti();
+            }, 1000);
+        };
+    </script>
+
+    <style>
+        :root { --gcash-blue: #007dfe; }
+        .bg-gcash { background-color: var(--gcash-blue); }
+        .text-gcash { color: var(--gcash-blue); }
+        .section-active { border-bottom: 4px solid white; font-weight: 900; }
+    </style>
+</head>
+<body class="bg-slate-50 min-h-screen pb-20 font-sans">
+
+    <nav class="bg-gcash text-white sticky top-0 z-50 shadow-md">
+        <div class="max-w-xl mx-auto p-4">
+            <div class="flex justify-between items-center mb-4">
+                <h1 class="text-xl font-black italic tracking-tighter">PH CONFESS LIVE</h1>
+                <div id="user-info" class="text-[10px] font-bold bg-blue-700 px-3 py-1 rounded-full text-white">...</div>
+            </div>
+            <div class="flex justify-around text-xs font-bold uppercase tracking-widest text-white">
+                <button onclick="showSection('wall')" id="nav-wall" class="pb-2 section-active">Wall</button>
+                <button onclick="showSection('games')" id="nav-games" class="pb-2">Games</button>
+                <button onclick="showSection('wallet')" id="nav-wallet" class="pb-2">Wallet</button>
+                <button id="admin-nav-btn" onclick="document.getElementById('admin-panel').classList.remove('hidden')" class="hidden pb-2 text-yellow-300">Admin</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-xl mx-auto p-4">
+        <!-- Login Screen -->
+        <div id="auth-section" class="bg-white p-8 rounded-3xl shadow-xl mt-10">
+            <h2 id="auth-title" class="text-2xl font-black text-center text-gcash mb-6 uppercase">Login / Join</h2>
+            <div class="space-y-4">
+                <input id="auth-user" type="text" placeholder="Username" class="w-full p-4 bg-slate-50 rounded-2xl border outline-none font-bold">
+                <input id="auth-pass" type="password" placeholder="Password" class="w-full p-4 bg-slate-50 rounded-2xl border outline-none font-bold">
+                <button onclick="handleAuth()" id="auth-btn" class="w-full bg-gcash text-white font-black py-4 rounded-2xl shadow-lg">Mag-Login</button>
+                <button onclick="toggleAuth()" id="auth-toggle" class="w-full text-xs text-gcash font-bold text-center underline">Gawa ng Account</button>
+            </div>
+        </div>
+
+        <!-- Wall Section -->
+        <div id="section-wall" class="hidden space-y-4">
+            <div class="bg-white p-5 rounded-3xl shadow-md border-t-4 border-blue-500">
+                <textarea id="msg-input" placeholder="Anong confession mo?" class="w-full p-4 bg-slate-50 rounded-2xl border-none h-24 outline-none text-sm mb-3 font-medium"></textarea>
+                <div class="flex gap-2 mb-4">
+                    <button onclick="setCost(5)" id="cost-5" class="flex-1 py-2 rounded-xl border-2 border-blue-500 text-blue-600 font-bold text-[10px] bg-blue-50">REGULAR (5)</button>
+                    <button onclick="setCost(10)" id="cost-10" class="flex-1 py-2 rounded-xl border-2 border-slate-100 text-slate-400 font-bold text-[10px]">URGENT (10)</button>
+                </div>
+                <button onclick="submitConfession()" class="w-full bg-gcash text-white font-black py-4 rounded-2xl shadow-lg">SEND TO WALL</button>
+            </div>
+            <div id="confessions-container" class="space-y-4"></div>
+        </div>
+
+        <!-- Games Section -->
+        <div id="section-games" class="hidden space-y-4 text-center">
+            <div class="bg-indigo-600 p-8 rounded-3xl text-white">
+                <h3 class="font-black italic text-lg">Love Scanner</h3>
+                <p class="text-[10px] mb-4 opacity-70">MATCH NAMES FOR +1 COIN</p>
+                <input type="text" class="si w-full p-3 mb-2 rounded-xl bg-white/10 text-white placeholder-white/50 outline-none" placeholder="Name 1">
+                <input type="text" class="si w-full p-3 mb-4 rounded-xl bg-white/10 text-white placeholder-white/50 outline-none" placeholder="Name 2">
+                <button onclick="runScanner()" class="w-full bg-white text-indigo-600 font-black py-3 rounded-xl">SCAN</button>
+            </div>
+        </div>
+
+        <!-- Wallet Section -->
+        <div id="section-wallet" class="hidden text-center p-10 bg-white rounded-3xl shadow-lg">
+            <p class="text-xs font-bold text-slate-400">YOUR COINS</p>
+            <h2 id="wallet-balance" class="text-6xl font-black text-gcash">0</h2>
+        </div>
+    </div>
+
+    <!-- Admin Modal -->
+    <div id="admin-panel" class="hidden fixed inset-0 bg-black/90 z-[100] p-6 overflow-y-auto">
+        <div class="max-w-xl mx-auto bg-white rounded-3xl overflow-hidden">
+            <div class="bg-red-600 p-5 text-white flex justify-between items-center">
+                <h3 class="font-black uppercase">Admin Approvals</h3>
+                <button onclick="document.getElementById('admin-panel').classList.add('hidden')" class="text-2xl">&times;</button>
+            </div>
+            <div id="pending-list" class="p-6 space-y-4"></div>
+        </div>
+    </div>
+
+    <script>
+        window.toggleAuth = () => {
+            const btn = document.getElementById('auth-btn');
+            const title = document.getElementById('auth-title');
+            const toggle = document.getElementById('auth-toggle');
+            if(btn.innerText === "Mag-Login") {
+                btn.innerText = "Register"; title.innerText = "Join Wall"; toggle.innerText = "May account na? Login";
+            } else {
+                btn.innerText = "Mag-Login"; title.innerText = "Welcome"; toggle.innerText = "Gawa ng Account";
+            }
+        };
+
+        window.setCost = (v) => {
+            window.confessCost = v;
+            document.getElementById('cost-5').classList.toggle('bg-blue-50', v === 5);
+            document.getElementById('cost-10').classList.toggle('bg-blue-50', v === 10);
+        };
+
+        function renderPosts(posts) {
+            document.getElementById('confessions-container').innerHTML = posts.map(p => `
+                <div class="bg-white p-5 rounded-3xl shadow-sm border border-slate-100">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-[8px] font-black uppercase px-2 py-1 rounded-full ${p.type === 'URGENT' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'}">${p.type}</span>
+                        <span class="text-[8px] text-slate-300 font-bold">${p.date}</span>
+                    </div>
+                    <p class="text-sm font-medium text-slate-700">"${p.message}"</p>
+                </div>
+            `).join('');
+        }
+
+        function renderPending(pends) {
+            document.getElementById('pending-list').innerHTML = pends.map(p => `
+                <div class="p-4 bg-slate-50 rounded-2xl border">
+                    <p class="text-[10px] font-bold text-blue-500 mb-1">${p.sender}</p>
+                    <p class="text-xs mb-3 italic">"${p.message}"</p>
+                    <div class="flex gap-2">
+                        <button onclick="adminAction('${p.docId}', true, ${JSON.stringify(p).replace(/"/g, '&quot;')})" class="flex-1 bg-green-500 text-white py-2 rounded-xl font-bold text-xs">APPROVE</button>
+                        <button onclick="adminAction('${p.docId}', false)" class="flex-1 bg-red-400 text-white py-2 rounded-xl font-bold text-xs">REJECT</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+    </script>
+</body>
+</html>
